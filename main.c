@@ -10,6 +10,7 @@
 #include <curl/curl.h>
 
 #include "cJSON.h"
+#define TOKEN "sl.AoLr56t0sqAM41zLIGdMeBMcY16Yl_KT7TzINcZrIF3iNYlFIUpE9GVFfBAVqJrsnHYrqhhfYdPHUi2xHx73Q3KobMaYb42Mzqgd0rCtzjJCRpdiDfmUp7HtjA4tqunEauayVs_b"
 
 struct MemoryStruct
 {
@@ -40,7 +41,7 @@ WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
 }
 
 //* returns 0 for error, or the number of bytes received otherwise
-unsigned long Get(char *url, char **rres)
+unsigned long Get(char *url, struct MemoryStruct *rres)
 {
   CURL *curl_handle;
   CURLcode res;
@@ -88,9 +89,7 @@ unsigned long Get(char *url, char **rres)
      * Do something nice with it!
      */
 
-    *rres = chunk.memory;
-
-    ret_val = (unsigned long)chunk.size;
+    ret_val = (unsigned long)rres->size;
   }
 
   /* cleanup curl stuff */
@@ -102,21 +101,24 @@ unsigned long Get(char *url, char **rres)
   return ret_val;
 }
 
-unsigned long Post(char *url, char *data, char **rres)
+unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
 {
   CURL *curl;
   CURLcode res;
-  struct MemoryStruct chunk;
+  // struct MemoryStruct chunk;
   int ret_val;
 
-  printf("BEFORE POST:\nUrl: %s\nData: %s\n", url, data);
+  printf("\nPOST:\nUrl: %s\nReq Body: %s\n", url, data);
 
   struct curl_slist *headers = NULL;
-  headers = curl_slist_append(headers, "Authorization: Bearer sl.AoJgD1y7BBtZx-OdzPuOkJNdjcwG1R0fYTo-aCK3zyHQPxRqj2PzMUq4JVshBGSqLBGx50KTZMfazLZZpCGX5INRA56_uUOdk8eAaiwnt8Xc9lsAhKiyB14gSF7gymggCjxxP7od");
+  char auth_token[1024];
+  strcpy(auth_token, "Authorization: Bearer ");
+  strcat(auth_token, TOKEN);
+  headers = curl_slist_append(headers, auth_token);
   headers = curl_slist_append(headers, "Content-Type:application/json");
 
-  chunk.memory = malloc(1); /* will be grown as needed by realloc above */
-  chunk.size = 0;           /* no data at this point */
+  rres->memory = malloc(1); /* will be grown as needed by realloc above */
+  rres->size = 0;           /* no data at this point */
 
   /* In windows, this will init the winsock stuff */
   curl_global_init(CURL_GLOBAL_ALL);
@@ -138,7 +140,7 @@ unsigned long Post(char *url, char *data, char **rres)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 
     /* we pass our 'chunk' struct to the callback function */
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)rres);
 
     /* some servers don't like requests that are made without a user-agent
        field, so we provide one */
@@ -147,11 +149,15 @@ unsigned long Post(char *url, char *data, char **rres)
     /* Perform the request, res will get the return code */
     res = curl_easy_perform(curl);
 
+    printf("Response code: %d\n", res);
+
     /* Check for errors */
     if (res != CURLE_OK)
     {
       fprintf(stderr, "curl_easy_perform() failed: %s\n",
               curl_easy_strerror(res));
+
+      printf("Error occured when posting data");
 
       ret_val = 0;
     }
@@ -164,16 +170,19 @@ unsigned long Post(char *url, char *data, char **rres)
        * Do something nice with it!
        */
 
-      printf("\n\n-----------------\n%s\n------------------\n\n", chunk.memory);
+      printf("\n\n-----------------\n%s\n------------------\n\n", rres->memory);
 
-      *rres = malloc(chunk.size * 1000);
-      memcpy(*rres, chunk.memory, chunk.size * 1000);
-      ret_val = (unsigned long)chunk.size;
-      printf("\n\n--------------------\nSIZE%d\n--------------------\n\n", ret_val);
+      // *rres = malloc(chunk.size * 1000);
+      // memcpy(*rres, chunk.memory, chunk.size * 1000);
+      ret_val = (unsigned long)rres->size;
     }
 
     /* always cleanup */
     curl_easy_cleanup(curl);
+  }
+  else
+  {
+    printf("No curl handler");
   }
 
   curl_global_cleanup();
@@ -182,7 +191,7 @@ unsigned long Post(char *url, char *data, char **rres)
 
 static int do_getattr(const char *path, struct stat *st)
 {
-  printf("getting attributes of %s\n", path);
+  printf("\n--> Getting The Attributes of %s\n", path);
 
   st->st_uid = getuid();
   st->st_gid = getgid();
@@ -192,14 +201,14 @@ static int do_getattr(const char *path, struct stat *st)
   //* the /get_metadata endpoint is not supported for the root folder
   if (strcmp(path, "/") == 0)
   {
-    printf("IN ROOT\n");
     int n_hardlinks = 2;
-    char *post_res = NULL;
+    struct MemoryStruct post_res;
+    printf("BEFORE POST ON %s\n", path);
     Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
+    printf("AFTER POST ON %s\n", path);
 
-    printf("After POST\n");
-    printf("%s", post_res);
-    cJSON *json = cJSON_Parse(post_res);
+    printf("DATA OUTSIDE:\n%s\n", post_res.memory);
+    cJSON *json = cJSON_Parse(post_res.memory);
     cJSON *entries = cJSON_GetObjectItem(json, "entries");
 
     cJSON *entry = NULL;
@@ -207,13 +216,13 @@ static int do_getattr(const char *path, struct stat *st)
     {
       cJSON *fileType = cJSON_GetObjectItem(entry, ".tag");
 
-      if (strcmp(fileType->valuestring, "folder") == 0)
+      if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
       {
         n_hardlinks++;
       }
     }
 
-    free(post_res);
+    free(post_res.memory);
 
     st->st_mode = S_IFDIR | 0755;
     st->st_nlink = n_hardlinks;
@@ -221,17 +230,21 @@ static int do_getattr(const char *path, struct stat *st)
   else
   {
     //* calling /get_metadata for any other path
-    char *post_res = malloc(1000000);
+    struct MemoryStruct post_res;
     char args[1024];
     strcpy(args, "{\"path\":\"");
     strcat(args, path);
     strcat(args, "\",\"include_media_info\":true}");
 
+    printf("BEFORE POST ON %s\n", path);
     Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res);
+    printf("AFTER POST ON %s\n", path);
 
-    cJSON *json = cJSON_Parse(post_res);
+    cJSON *json = cJSON_Parse(post_res.memory);
     cJSON *fileType = cJSON_GetObjectItem(json, ".tag");
-    if (strcmp(fileType->valuestring, "file") == 0)
+
+    printf("DATA OUTSIDE:\n%s\n", post_res.memory);
+    if (fileType != NULL && strcmp(fileType->valuestring, "file") == 0)
     {
       st->st_mode = S_IFREG | 0644;
       st->st_nlink = 1;
@@ -239,16 +252,19 @@ static int do_getattr(const char *path, struct stat *st)
       cJSON *fileSize = cJSON_GetObjectItem(json, "size");
       st->st_size = fileSize->valueint;
     }
-    else if (strcmp(fileType->valuestring, "folder") == 0)
+    else if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
     {
       int n_hardlinks = 2;
-      char *post_res_2 = malloc(1000000);
+      struct MemoryStruct post_res_2;
       strcpy(args, "{\"path\":\"");
       strcat(args, path);
       strcat(args, "\"}");
-      Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res_2);
 
-      cJSON *json = cJSON_Parse(post_res_2);
+      printf("BEFORE POST ON %s\n", path);
+      Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res_2);
+      printf("AFTER POST ON %s\n", path);
+
+      cJSON *json = cJSON_Parse(post_res_2.memory);
       cJSON *entries = cJSON_GetObjectItem(json, "entries");
 
       cJSON *entry = NULL;
@@ -256,19 +272,19 @@ static int do_getattr(const char *path, struct stat *st)
       {
         cJSON *fileType = cJSON_GetObjectItem(entry, ".tag");
 
-        if (strcmp(fileType->valuestring, "folder"))
+        if (fileType != NULL && strcmp(fileType->valuestring, "folder"))
         {
           n_hardlinks++;
         }
       }
 
-      free(post_res_2);
+      free(post_res_2.memory);
 
       st->st_mode = S_IFDIR | 0755;
       st->st_nlink = n_hardlinks;
     }
 
-    free(post_res);
+    free(post_res.memory);
   }
 
   return 0;
@@ -283,10 +299,12 @@ static int do_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, of
 
   if (strcmp(path, "/") == 0) // If the user is trying to show the files/directories of the root directory show the following
   {
-    char *post_res = malloc(1000000);
+    struct MemoryStruct post_res;
+    printf("BEFORE POST ON %s\n", path);
     Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
+    printf("AFTER POST ON %s\n", path);
 
-    cJSON *json = cJSON_Parse(post_res);
+    cJSON *json = cJSON_Parse(post_res.memory);
     cJSON *entries = cJSON_GetObjectItem(json, "entries");
 
     cJSON *entry = NULL;
