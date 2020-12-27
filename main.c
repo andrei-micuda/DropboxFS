@@ -1,4 +1,4 @@
-#define FUSE_USE_VERSION 30
+#define FUSE_USE_VERSION 34
 
 #include <fuse.h>
 #include <stdio.h>
@@ -8,9 +8,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <curl/curl.h>
+#include <errno.h>
+#include <stdbool.h>
 
 #include "cJSON.h"
-#define TOKEN "sl.AoLr56t0sqAM41zLIGdMeBMcY16Yl_KT7TzINcZrIF3iNYlFIUpE9GVFfBAVqJrsnHYrqhhfYdPHUi2xHx73Q3KobMaYb42Mzqgd0rCtzjJCRpdiDfmUp7HtjA4tqunEauayVs_b"
+#define TOKEN "sl.AoONAIOvFczRwicvYdFn2vM1M24k50Ehu92qnkVL164pFEZjTPrndHMTlyXSPjM7i20jK90NaXDp-JbPRU-5KGf9FKmXPE6q1OxuT530H8Vf91KrAE7e0vDTePfqt3A5_8KOsvkb"
 
 struct MemoryStruct
 {
@@ -108,8 +110,6 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
   // struct MemoryStruct chunk;
   int ret_val;
 
-  printf("\nPOST:\nUrl: %s\nReq Body: %s\n", url, data);
-
   struct curl_slist *headers = NULL;
   char auth_token[1024];
   strcpy(auth_token, "Authorization: Bearer ");
@@ -149,8 +149,6 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
     /* Perform the request, res will get the return code */
     res = curl_easy_perform(curl);
 
-    printf("Response code: %d\n", res);
-
     /* Check for errors */
     if (res != CURLE_OK)
     {
@@ -170,8 +168,6 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
        * Do something nice with it!
        */
 
-      printf("\n\n-----------------\n%s\n------------------\n\n", rres->memory);
-
       // *rres = malloc(chunk.size * 1000);
       // memcpy(*rres, chunk.memory, chunk.size * 1000);
       ret_val = (unsigned long)rres->size;
@@ -189,6 +185,101 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
   return ret_val;
 }
 
+//* calls the get_metadata api endpoint on the specified path
+//* https://dropbox.github.io/dropbox-api-v2-explorer/#files_get_metadata
+//* not supported for the root
+cJSON *GetMetadata(const char *path)
+{
+  struct MemoryStruct post_res;
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\"}");
+
+  Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res);
+
+  cJSON *json = cJSON_Parse(post_res.memory);
+
+  free(post_res.memory);
+
+  return json;
+}
+
+//* calls the list_folder api endpoint on the specified path
+//* https://dropbox.github.io/dropbox-api-v2-explorer/#files_list_folder
+cJSON *ListFolder(const char *path)
+{
+  //* we construct the body of the request
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  if (strcmp(path, "/") != 0)
+  {
+    strcat(args, path);
+  }
+  strcat(args, "\"}");
+
+  struct MemoryStruct post_res;
+  Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res);
+
+  cJSON *json = cJSON_Parse(post_res.memory);
+
+  free(post_res.memory);
+
+  return json;
+}
+
+//* checks if the object pointed at by path is a folder
+//* calls GetMetadata and checks the .tag field
+bool IsFolder(const char *path)
+{
+  if (strcmp(path, "/") == 0)
+    return true;
+
+  cJSON *json = GetMetadata(path);
+  cJSON *fileType = cJSON_GetObjectItem(json, ".tag");
+
+  if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
+  {
+    cJSON_Delete(json);
+    return true;
+  }
+  cJSON_Delete(json);
+  return false;
+}
+
+//* counts the number of subfolders located at the given path
+//* number of hardlinks is nr_of_subfolders + 2 (. -> current dir and .. -> parent dir)
+//* only call for folders (files have only one hardlink)
+int GetNumberOfHardLinks(const char *path)
+{
+  //* any folder will have at least 2 hardlinks
+  int n_hardlinks = 2;
+
+  cJSON *json = ListFolder(path);
+  cJSON *entries = cJSON_GetObjectItem(json, "entries");
+  if (entries == NULL) //* couldn't parse json
+  {
+    printf("Couldn't retrieve 'entries' field from the JSON object");
+    return -ENOENT;
+  }
+  else
+  {
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, entries)
+    {
+      cJSON *fileType = cJSON_GetObjectItem(entry, ".tag");
+
+      if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
+      {
+        n_hardlinks++;
+      }
+    }
+
+    cJSON_Delete(json);
+    return n_hardlinks;
+  }
+}
+
 static int do_getattr(const char *path, struct stat *st)
 {
   printf("\n--> Getting The Attributes of %s\n", path);
@@ -201,49 +292,16 @@ static int do_getattr(const char *path, struct stat *st)
   //* the /get_metadata endpoint is not supported for the root folder
   if (strcmp(path, "/") == 0)
   {
-    int n_hardlinks = 2;
-    struct MemoryStruct post_res;
-    printf("BEFORE POST ON %s\n", path);
-    Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
-    printf("AFTER POST ON %s\n", path);
-
-    printf("DATA OUTSIDE:\n%s\n", post_res.memory);
-    cJSON *json = cJSON_Parse(post_res.memory);
-    cJSON *entries = cJSON_GetObjectItem(json, "entries");
-
-    cJSON *entry = NULL;
-    cJSON_ArrayForEach(entry, entries)
-    {
-      cJSON *fileType = cJSON_GetObjectItem(entry, ".tag");
-
-      if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
-      {
-        n_hardlinks++;
-      }
-    }
-
-    free(post_res.memory);
-
     st->st_mode = S_IFDIR | 0755;
-    st->st_nlink = n_hardlinks;
+    st->st_nlink = GetNumberOfHardLinks("/");
   }
   else
   {
     //* calling /get_metadata for any other path
-    struct MemoryStruct post_res;
-    char args[1024];
-    strcpy(args, "{\"path\":\"");
-    strcat(args, path);
-    strcat(args, "\",\"include_media_info\":true}");
 
-    printf("BEFORE POST ON %s\n", path);
-    Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res);
-    printf("AFTER POST ON %s\n", path);
-
-    cJSON *json = cJSON_Parse(post_res.memory);
+    cJSON *json = GetMetadata(path);
     cJSON *fileType = cJSON_GetObjectItem(json, ".tag");
 
-    printf("DATA OUTSIDE:\n%s\n", post_res.memory);
     if (fileType != NULL && strcmp(fileType->valuestring, "file") == 0)
     {
       st->st_mode = S_IFREG | 0644;
@@ -254,37 +312,16 @@ static int do_getattr(const char *path, struct stat *st)
     }
     else if (fileType != NULL && strcmp(fileType->valuestring, "folder") == 0)
     {
-      int n_hardlinks = 2;
-      struct MemoryStruct post_res_2;
-      strcpy(args, "{\"path\":\"");
-      strcat(args, path);
-      strcat(args, "\"}");
-
-      printf("BEFORE POST ON %s\n", path);
-      Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res_2);
-      printf("AFTER POST ON %s\n", path);
-
-      cJSON *json = cJSON_Parse(post_res_2.memory);
-      cJSON *entries = cJSON_GetObjectItem(json, "entries");
-
-      cJSON *entry = NULL;
-      cJSON_ArrayForEach(entry, entries)
-      {
-        cJSON *fileType = cJSON_GetObjectItem(entry, ".tag");
-
-        if (fileType != NULL && strcmp(fileType->valuestring, "folder"))
-        {
-          n_hardlinks++;
-        }
-      }
-
-      free(post_res_2.memory);
-
       st->st_mode = S_IFDIR | 0755;
-      st->st_nlink = n_hardlinks;
+      st->st_nlink = GetNumberOfHardLinks(path);
+    }
+    else
+    {
+      cJSON_Delete(json);
+      return -ENOENT;
     }
 
-    free(post_res.memory);
+    cJSON_Delete(json);
   }
 
   return 0;
@@ -292,19 +329,17 @@ static int do_getattr(const char *path, struct stat *st)
 
 static int do_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
 {
-  printf("--> Getting The List of Files of %s\n", path);
+  printf("\n--> Getting The List of Files of %s\n", path);
 
-  filler(buffer, ".", NULL, 0);  // Current Directory
-  filler(buffer, "..", NULL, 0); // Parent Directory
-
-  if (strcmp(path, "/") == 0) // If the user is trying to show the files/directories of the root directory show the following
+  //* check if the path is a folder
+  //* if it is, call list_folder and use filler to add the folder entries into the buffer
+  //* if it's a file return -ENOENT (No such file or directory)
+  if (IsFolder(path))
   {
-    struct MemoryStruct post_res;
-    printf("BEFORE POST ON %s\n", path);
-    Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
-    printf("AFTER POST ON %s\n", path);
+    filler(buffer, ".", NULL, 0);  //* Current Directory
+    filler(buffer, "..", NULL, 0); //* Parent Directory
 
-    cJSON *json = cJSON_Parse(post_res.memory);
+    cJSON *json = ListFolder(path);
     cJSON *entries = cJSON_GetObjectItem(json, "entries");
 
     cJSON *entry = NULL;
@@ -313,36 +348,16 @@ static int do_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, of
       cJSON *fileName = cJSON_GetObjectItem(entry, "name");
       filler(buffer, fileName->valuestring, NULL, 0);
     }
+
+    cJSON_Delete(json);
+  }
+  else
+  {
+    return -ENOENT;
   }
 
   return 0;
 }
-
-// int main()
-// {
-//   // char *post_res = malloc(1000000);
-//   // Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
-
-//   // cJSON *json = cJSON_Parse(post_res);
-//   // printf("%s", cJSON_Print(json));
-
-//   char *post_res = malloc(1000000);
-//   Post("https://api.dropboxapi.com/2/files/list_folder", "{\"path\":\"\"}", &post_res);
-
-//   cJSON *json = cJSON_Parse(post_res);
-//   cJSON *entries = cJSON_GetObjectItem(json, "entries");
-
-//   cJSON *entry = NULL;
-//   cJSON_ArrayForEach(entry, entries)
-//   {
-//     cJSON *fileName = cJSON_GetObjectItem(entry, "name");
-//     printf("%s\n", fileName->valuestring);
-//   }
-
-//   free(post_res);
-
-//   return 0;
-// }
 
 static struct fuse_operations operations = {
     .getattr = do_getattr,
