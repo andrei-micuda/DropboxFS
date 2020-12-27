@@ -20,4 +20,4 @@ A FUSE for interacting with Dropbox written in C.
 
 ## License
 
-The project is published under the [MIT License](LICENSE).
+The project is published under the [MIT License](LICENSE.md).
