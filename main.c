@@ -12,7 +12,7 @@
 #include <stdbool.h>
 
 #include "cJSON.h"
-#define TOKEN "sl.AoONAIOvFczRwicvYdFn2vM1M24k50Ehu92qnkVL164pFEZjTPrndHMTlyXSPjM7i20jK90NaXDp-JbPRU-5KGf9FKmXPE6q1OxuT530H8Vf91KrAE7e0vDTePfqt3A5_8KOsvkb"
+#define TOKEN "INSERT YOUR TOKEN HERE"
 
 struct MemoryStruct
 {
