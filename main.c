@@ -12,7 +12,7 @@
 #include <stdbool.h>
 
 #include "cJSON.h"
-#define TOKEN "INSERT YOUR TOKEN HERE"
+#define TOKEN "wtmYTvddvwUAAAAAAAAAARfWbCN2EaH96Qnc95ugEm1HeOuoWMG2faqedKvbgQpl"
 
 struct MemoryStruct
 {
@@ -103,7 +103,7 @@ unsigned long Get(char *url, struct MemoryStruct *rres)
   return ret_val;
 }
 
-unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
+unsigned long Post(char *url, char *data, struct MemoryStruct *rres, char* hpath)
 {
   CURL *curl;
   CURLcode res;
@@ -115,7 +115,22 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
   strcpy(auth_token, "Authorization: Bearer ");
   strcat(auth_token, TOKEN);
   headers = curl_slist_append(headers, auth_token);
-  headers = curl_slist_append(headers, "Content-Type:application/json");
+
+  if(strcmp(hpath, "") != 0) {
+    char header_path[1024];
+    strcpy(header_path, "Dropbox-API-Arg: ");
+    strcat(header_path, "{\"path\":\"");
+    strcat(header_path, hpath);
+    strcat(header_path, "\"}");
+
+    printf("%s", header_path);
+
+    headers = curl_slist_append(headers, "Content-Type:text/plain");
+    headers = curl_slist_append(headers, header_path);
+  }
+  else {
+    headers = curl_slist_append(headers, "Content-Type:application/json");
+  }
 
   rres->memory = malloc(1); /* will be grown as needed by realloc above */
   rres->size = 0;           /* no data at this point */
@@ -134,6 +149,7 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres)
     /* Set Content-Type to application/json */
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     /* Now specify the POST data */
+
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
 
     /* send all data to this function  */
@@ -196,7 +212,9 @@ cJSON *GetMetadata(const char *path)
   strcat(args, path);
   strcat(args, "\"}");
 
-  Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res);
+  Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res, "");
+
+  //printf("%s", post_res.memory);
 
   cJSON *json = cJSON_Parse(post_res.memory);
 
@@ -219,7 +237,7 @@ cJSON *ListFolder(const char *path)
   strcat(args, "\"}");
 
   struct MemoryStruct post_res;
-  Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res);
+  Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res, "");
 
   cJSON *json = cJSON_Parse(post_res.memory);
 
@@ -359,9 +377,29 @@ static int do_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, of
   return 0;
 }
 
+static int do_read(const char* path, char* buffer, size_t size, off_t offset, struct fuse_file_info* fi)
+{
+  size_t len;
+
+  struct MemoryStruct post_res;
+  Post("https://content.dropboxapi.com/2/files/download", "", &post_res, path);
+  //printf("%s", post_res.memory);
+
+  len = strlen(post_res.memory);
+  if(offset < len) {
+    if (offset + size > len)
+      size = len - offset;
+    memcpy(buffer, post_res.memory + offset, size);
+  }
+  else
+    size = 0;
+  return size;
+}
+
 static struct fuse_operations operations = {
     .getattr = do_getattr,
-    .readdir = do_readdir};
+    .readdir = do_readdir,
+    .read    = do_read};
 
 int main(int argc, char *argv[])
 {
