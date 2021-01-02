@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/time.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
@@ -396,10 +398,29 @@ static int do_read(const char* path, char* buffer, size_t size, off_t offset, st
   return size;
 }
 
+static int do_mkdir(const char* path, mode_t mode)
+{
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\", \"autorename\": false}");
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/create_folder_v2", args , &post_res, "");
+
+  printf("%s", post_res.memory);
+
+  return 0;
+}
+
 static struct fuse_operations operations = {
     .getattr = do_getattr,
     .readdir = do_readdir,
-    .read    = do_read};
+    .read    = do_read,
+    .mkdir   = do_mkdir};
 
 int main(int argc, char *argv[])
 {
