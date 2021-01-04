@@ -14,7 +14,7 @@
 #include <stdbool.h>
 
 #include "cJSON.h"
-#define TOKEN "wtmYTvddvwUAAAAAAAAAARfWbCN2EaH96Qnc95ugEm1HeOuoWMG2faqedKvbgQpl"
+#define TOKEN "qT9LT0TBKMAAAAAAAAAAAbEbLvkFbvB2J3_IEreAZ1bqHUukxQ2wAAzAIMMVcw2u"
 
 struct MemoryStruct
 {
@@ -415,12 +415,75 @@ static int do_mkdir(const char* path, mode_t mode)
 
   return 0;
 }
+static int do_rmdir ( const char * path, mode_t mode)
+{
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\"}");
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/delete_v2", args , &post_res, "");
+
+  printf("%s",post_res.memory);
+
+  return 0 ;
+
+}
+
+static int do_unlink ( const char * path, mode_t mode)
+{
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\"}");
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/delete_v2", args , &post_res, "");
+
+  printf("%s",post_res.memory);
+
+  return 0 ;
+
+}
+
+static int do_rename (const char * oldpath, const char * newpath,mode_t mode)
+{
+  struct MemoryStruct post_rest;
+
+  char args[1024];
+  strcpy(args, "{\"from_path\":\"");
+  strcat(args, oldpath);
+  strcat(args, "\", \"to_path\":\"");
+  strcat(args, newpath);
+  strcat(args, "\", \"allow_shared_folder\": false");
+  strcat(args, ", \"autorename\": false");
+  strcat(args, ", \"allow_ownership_transfer\": false}");
+
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/move_v2", args , &post_res, "");
+
+  printf("%s",post_res.memory);
+
+  return 0 ;
+}
 
 static struct fuse_operations operations = {
     .getattr = do_getattr,
     .readdir = do_readdir,
     .read    = do_read,
-    .mkdir   = do_mkdir};
+    .mkdir   = do_mkdir,
+    .rmdir  = do_rmdir,
+    .unlink  = do_unlink,
+    .rename = do_rename};
 
 int main(int argc, char *argv[])
 {
