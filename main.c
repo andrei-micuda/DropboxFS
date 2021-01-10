@@ -14,13 +14,15 @@
 #include <stdbool.h>
 
 #include "cJSON.h"
-#define TOKEN "wtmYTvddvwUAAAAAAAAAARfWbCN2EaH96Qnc95ugEm1HeOuoWMG2faqedKvbgQpl"
+#define TOKEN ""
 
 struct MemoryStruct
 {
   char *memory;
   size_t size;
 };
+
+char currDoc[1024];
 
 static size_t
 WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
@@ -105,7 +107,7 @@ unsigned long Get(char *url, struct MemoryStruct *rres)
   return ret_val;
 }
 
-unsigned long Post(char *url, char *data, struct MemoryStruct *rres, char* hpath)
+unsigned long Post(char *url, char *data, struct MemoryStruct *rres, const char* hpath, char* contentType)
 {
   CURL *curl;
   CURLcode res;
@@ -118,20 +120,31 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres, char* hpath
   strcat(auth_token, TOKEN);
   headers = curl_slist_append(headers, auth_token);
 
+  char ct[1024];
+
+  strcpy(ct, "Content-Type:");
+  strcat(ct, contentType);
+
   if(strcmp(hpath, "") != 0) {
-    char header_path[1024];
-    strcpy(header_path, "Dropbox-API-Arg: ");
-    strcat(header_path, "{\"path\":\"");
-    strcat(header_path, hpath);
-    strcat(header_path, "\"}");
+    char apiArg[1024];
+    strcpy(apiArg, "Dropbox-API-Arg: ");
+    strcat(apiArg, "{\"path\":\"");
+    strcat(apiArg, hpath);
 
-    printf("%s", header_path);
+    if(contentType == "application/octet-stream"){
+      strcat(apiArg, "\", \"mode\": \"overwrite\", \"autorename\": true, \"mute\": false, \"strict_conflict\": false}");
+    }
+    else{
+      strcat(apiArg, "\"}");
+    }
 
-    headers = curl_slist_append(headers, "Content-Type:text/plain");
-    headers = curl_slist_append(headers, header_path);
+    printf("\n%s\n", apiArg);
+
+    headers = curl_slist_append(headers, ct);                                                  //text/plain      application/octet-stream
+    headers = curl_slist_append(headers, apiArg);
   }
   else {
-    headers = curl_slist_append(headers, "Content-Type:application/json");
+    headers = curl_slist_append(headers, ct);                                                          //application/json
   }
 
   rres->memory = malloc(1); /* will be grown as needed by realloc above */
@@ -148,11 +161,14 @@ unsigned long Post(char *url, char *data, struct MemoryStruct *rres, char* hpath
       just as well be a https:// URL if that is what should receive the
       data. */
     curl_easy_setopt(curl, CURLOPT_URL, url);
+
     /* Set Content-Type to application/json */
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     /* Now specify the POST data */
 
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
+
+    // curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
 
     /* send all data to this function  */
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -214,7 +230,7 @@ cJSON *GetMetadata(const char *path)
   strcat(args, path);
   strcat(args, "\"}");
 
-  Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res, "");
+  Post("https://api.dropboxapi.com/2/files/get_metadata", args, &post_res, "", "application/json");
 
   //printf("%s", post_res.memory);
 
@@ -239,7 +255,7 @@ cJSON *ListFolder(const char *path)
   strcat(args, "\"}");
 
   struct MemoryStruct post_res;
-  Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res, "");
+  Post("https://api.dropboxapi.com/2/files/list_folder", args, &post_res, "", "application/json");
 
   cJSON *json = cJSON_Parse(post_res.memory);
 
@@ -381,11 +397,15 @@ static int do_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, of
 
 static int do_read(const char* path, char* buffer, size_t size, off_t offset, struct fuse_file_info* fi)
 {
+  printf("\n--> Reading file %s\n", path);
+
   size_t len;
 
   struct MemoryStruct post_res;
-  Post("https://content.dropboxapi.com/2/files/download", "", &post_res, path);
+  Post("https://content.dropboxapi.com/2/files/download", "", &post_res, path, "");
   //printf("%s", post_res.memory);
+
+  strcpy(currDoc, path);
 
   len = strlen(post_res.memory);
   if(offset < len) {
@@ -400,27 +420,137 @@ static int do_read(const char* path, char* buffer, size_t size, off_t offset, st
 
 static int do_mkdir(const char* path, mode_t mode)
 {
+  printf("\n--> Making dir %s\n", path);
+
   struct MemoryStruct post_res;
 
   char args[1024];
-  strcpy(args, "{\"path\":\"");
+  strcpy(args, "{\"path\":\"");     
   strcat(args, path);
   strcat(args, "\", \"autorename\": false}");
 
   printf("%s", args);
 
-  Post("https://api.dropboxapi.com/2/files/create_folder_v2", args , &post_res, "");
+  Post("https://api.dropboxapi.com/2/files/create_folder_v2", args , &post_res, "", "application/json");
 
   printf("%s", post_res.memory);
 
   return 0;
 }
 
+static int do_rmdir ( const char * path, mode_t mode)
+{
+  printf("\n--> Removing dir %s\n", path);
+
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\"}");
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/delete_v2", args , &post_res, "", "application/json");
+
+  printf("%s",post_res.memory);
+
+  return 0 ;
+
+}
+
+int unlink(const char* path){
+  printf("\n--> Unlinking %s\n", path);
+
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"path\":\"");
+  strcat(args, path);
+  strcat(args, "\"}");
+
+  printf("%s", args);
+
+  Post("https://api.dropboxapi.com/2/files/delete_v2", args , &post_res, "", "application/json");
+
+  printf("%s",post_res.memory);
+}
+
+static int do_unlink ( const char * path, mode_t mode)
+{
+  unlink(path);
+
+  return 0 ;
+}
+
+static int do_rename (const char * oldpath, const char * newpath, mode_t mode)
+{
+  printf("\n--> Renaming %s to %s \n", oldpath, newpath);
+
+  struct MemoryStruct post_res;
+
+  char args[1024];
+  strcpy(args, "{\"from_path\":\"");
+  strcat(args, oldpath);
+  strcat(args, "\", \"to_path\":\"");
+  strcat(args, newpath);
+  strcat(args, "\", \"allow_shared_folder\": false");
+  strcat(args, ", \"autorename\": true");
+  strcat(args, ", \"allow_ownership_transfer\": false}");
+
+
+  // printf("--> %s", args);
+
+  Post("https://api.dropboxapi.com/2/files/move_v2", args , &post_res, "", "application/json");
+
+  printf("\n-->%s\n",post_res.memory);
+
+  return 0 ;
+}
+
+static int do_mknod(const char *path, mode_t mode, dev_t rdev){
+  struct MemoryStruct post_res;
+  printf("\n--> Making node %s\n", path);
+
+  // char args[1024];
+
+  // strcpy(args, "{\"path\":\"");     
+  // strcat(args, path);
+  // strcat(args, " mode\": \"add\", \"autorename\": false, \"mute\": false, \"strict_conflict\": false}");
+  // printf("%s", args);
+
+  Post("https://content.dropboxapi.com/2/files/upload", "", &post_res, path, "application/octet-stream");
+
+  return 0;
+}
+
+static int do_write( const char *path, const char *buffer, size_t size, off_t offset, struct fuse_file_info *info ){
+  struct MemoryStruct post_res;
+
+  printf("\n--> Writing to %s\n", path);
+  char bufferCpy[1024];
+
+  strcpy(bufferCpy, buffer);
+
+  unlink(currDoc);
+  
+  Post("https://content.dropboxapi.com/2/files/upload", bufferCpy, &post_res, path, "application/octet-stream");
+
+  printf("\n--> %s\n", post_res.memory);
+
+  return size;
+}
+
 static struct fuse_operations operations = {
     .getattr = do_getattr,
     .readdir = do_readdir,
     .read    = do_read,
-    .mkdir   = do_mkdir};
+    .mkdir   = do_mkdir,
+    .rmdir  = do_rmdir,
+    .unlink  = do_unlink,
+    .rename = do_rename,
+    .mknod = do_mknod,
+    .write = do_write};
 
 int main(int argc, char *argv[])
 {
